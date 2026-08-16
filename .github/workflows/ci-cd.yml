@@ -402,6 +402,10 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment: staging
 
+    outputs:
+      deployment-url: ${{ steps.deploy.outputs.deployment-url }}
+      deployed: ${{ steps.deploy.outputs.deployed }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -410,13 +414,26 @@ jobs:
         with:
           version: 'v1.29.0'
 
+      # Real deploy only runs once a STAGING_KUBECONFIG secret is wired up for this
+      # environment. Until then this stays a stub (echoes the command it would run)
+      # rather than pretending traffic is live. `deployed` reports which case we're
+      # in so load-test-staging below can skip itself instead of load-testing a URL
+      # nothing is listening on -- that's what was making it fail in ~17s every run.
       - name: Deploy to staging
+        id: deploy
         run: |
-          echo "helm upgrade --install signal-intel infra/helm/signal-intel-platform -n staging -f values-staging.yaml"
-          # Wire up real cluster credentials via secrets before enabling this for real.
-
-    outputs:
-      deployment-url: "https://staging.signal-intel.example.com"
+          if [ -n "${{ secrets.STAGING_KUBECONFIG }}" ]; then
+            echo "${{ secrets.STAGING_KUBECONFIG }}" | base64 -d > kubeconfig-staging.yaml
+            export KUBECONFIG=kubeconfig-staging.yaml
+            helm upgrade --install signal-intel infra/helm/signal-intel-platform -n staging -f values-staging.yaml
+            echo "deployment-url=https://staging.signal-intel.example.com" >> "$GITHUB_OUTPUT"
+            echo "deployed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "STAGING_KUBECONFIG not set -- staging deploy is still a stub, nothing was actually deployed."
+            echo "helm upgrade --install signal-intel infra/helm/signal-intel-platform -n staging -f values-staging.yaml"
+            echo "deployment-url=" >> "$GITHUB_OUTPUT"
+            echo "deployed=false" >> "$GITHUB_OUTPUT"
+          fi
 
   load-test-staging:
     needs: [deploy-staging]
@@ -427,6 +444,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup k6
+        if: needs.deploy-staging.outputs.deployed == 'true'
         run: |
           sudo gpg -k
           sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
@@ -435,12 +453,21 @@ jobs:
           sudo apt-get install k6
 
       - name: Run load tests against staging
+        if: needs.deploy-staging.outputs.deployed == 'true'
         run: |
           k6 run loadtests/k6-scripts/api-load-test.js \
             --env BASE_URL=${{ needs.deploy-staging.outputs.deployment-url }} \
             --out json=loadtest-results.json
 
+      # deploy-staging didn't deploy anything real (no STAGING_KUBECONFIG secret yet),
+      # so there's no live target to load-test against. Skip cleanly instead of failing
+      # on a health check against a URL nothing is listening on.
+      - name: Skip load test (staging deploy is still a stub)
+        if: needs.deploy-staging.outputs.deployed != 'true'
+        run: echo "deploy-staging did not deploy anything real -- skipping k6 load test."
+
       - name: Upload load test results
+        if: needs.deploy-staging.outputs.deployed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: loadtest-results
