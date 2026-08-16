@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://signal-intel.local/schemas/alert.v1.schema.json",
+  "title": "SignalAlert",
+  "description": "Canonical envelope for a confirmed anomaly published to `signal.alerts.v1` by the anomaly-detection Flink job and consumed by notifier-service.",
+  "type": "object",
+  "required": [
+    "alert_id", "source", "timestamp", "anomaly_type", "severity",
+    "value", "threshold", "z_score", "description", "is_anomaly"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "alert_id": { "type": "string", "minLength": 1 },
+    "source": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "anomaly_type": { "type": "string" },
+    "severity": { "type": "string", "enum": ["info", "warning", "critical"] },
+    "value": { "type": "number" },
+    "threshold": { "type": "number" },
+    "z_score": { "type": "number" },
+    "description": { "type": "string" },
+    "is_anomaly": { "type": "boolean" },
+    "stats": {
+      "type": ["object", "null"],
+      "additionalProperties": { "type": "number" }
+    }
+  }
+}

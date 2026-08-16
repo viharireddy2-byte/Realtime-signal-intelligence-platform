@@ -20,6 +20,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 import logging
+import os
 from dataclasses import dataclass, field, asdict
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
@@ -27,7 +28,12 @@ import time
 import argparse
 from prometheus_client import Counter, Histogram, Gauge, start_http_server
 
+from logging_config import configure_logging, bind_correlation_id
+from schema_validation import validate_event
+from tracing import init_tracing, kafka_trace_headers
+
 SCHEMA_VERSION = "2.0"
+DLQ_TOPIC = os.getenv("EVENTS_DLQ_TOPIC", "signal.events.dlq")
 
 # --------------------------------------------------------------------------
 # Prometheus metrics
@@ -44,12 +50,13 @@ KAFKA_ERRORS = Counter(
 EVENTS_PER_SECOND = Gauge(
     "signal_events_per_second", "Current observed event production rate"
 )
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [event-producer] %(message)s",
+EVENTS_DLQ = Counter(
+    "signal_events_dlq_total", "Events that failed schema validation and were routed to the DLQ topic", ["source"]
 )
+
+configure_logging("event-producer")
 logger = logging.getLogger(__name__)
+tracer = init_tracing("event-producer")
 
 
 @dataclass
@@ -165,6 +172,44 @@ class EventGenerator:
         )
 
 
+@dataclass
+class PublishPlan:
+    """Where an event should go and what it should look like on the wire.
+    Deliberately I/O-free so the routing decision (valid -> main topic,
+    invalid -> DLQ topic) is unit-testable without a Kafka connection."""
+
+    topic: str
+    payload: str
+    headers: List[Any]
+    is_valid: bool
+    validation_error: str
+
+
+def plan_publish(event: Event, topic: str, dlq_topic: str) -> PublishPlan:
+    """Validate `event` against schemas/event.v1.schema.json and decide
+    whether it's published to `topic` (valid) or `dlq_topic` (invalid, with
+    the validation error and original event embedded in the DLQ payload).
+    Pure function: no network calls, no mutation of producer state."""
+    bind_correlation_id(event.event_id)
+    event_dict = event.to_dict()
+    is_valid, validation_error = validate_event(event_dict)
+    headers = kafka_trace_headers(event.event_id)
+
+    if not is_valid:
+        payload = json.dumps(
+            {
+                "error": validation_error,
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+                "original_topic": topic,
+                "event": event_dict,
+            },
+            separators=(",", ":"),
+        )
+        return PublishPlan(topic=dlq_topic, payload=payload, headers=headers, is_valid=False, validation_error=validation_error)
+
+    return PublishPlan(topic=topic, payload=event.to_json(), headers=headers, is_valid=True, validation_error="")
+
+
 class SignalEventProducer:
     """Kafka producer wrapper with throughput control and delivery metrics."""
 
@@ -172,9 +217,11 @@ class SignalEventProducer:
         self,
         bootstrap_servers: List[str] = None,
         topic: str = "signal.events.v1",
+        dlq_topic: str = DLQ_TOPIC,
         **kafka_config,
     ):
         self.topic = topic
+        self.dlq_topic = dlq_topic
         self.event_generator = EventGenerator()
 
         producer_config = {
@@ -206,15 +253,41 @@ class SignalEventProducer:
 
     @PRODUCE_DURATION.time()
     def produce_event(self, event: Event):
-        try:
-            future = self.producer.send(self.topic, key=event.source, value=event.to_json())
-            future.add_callback(self._delivery_callback(event.source))
-            future.add_errback(lambda e: self._delivery_callback(event.source)(exception=e))
-            return future
-        except KafkaError as e:
-            logger.error("Error producing event: %s", e)
-            KAFKA_ERRORS.labels(error_type=type(e).__name__).inc()
-            raise
+        """Validate the event against schemas/event.v1.schema.json, then
+        publish it — to the normal topic if valid, to the DLQ topic (with
+        the validation error attached) if not. Either way this never raises
+        on a schema failure: a malformed event should be quarantined for
+        inspection, not crash the producer or silently vanish."""
+        plan = plan_publish(event, topic=self.topic, dlq_topic=self.dlq_topic)
+
+        if not plan.is_valid:
+            logger.warning(
+                "Event %s failed schema validation (%s); routing to DLQ topic '%s'",
+                event.event_id, plan.validation_error, plan.topic,
+            )
+            EVENTS_DLQ.labels(source=event.source).inc()
+            try:
+                future = self.producer.send(plan.topic, key=event.source, value=plan.payload, headers=plan.headers)
+                future.add_callback(self._delivery_callback(event.source))
+                future.add_errback(lambda e: self._delivery_callback(event.source)(exception=e))
+                return future
+            except KafkaError as e:
+                logger.error("Error producing to DLQ topic: %s", e)
+                KAFKA_ERRORS.labels(error_type=type(e).__name__).inc()
+                raise
+
+        with tracer.start_as_current_span(
+            "produce_event", attributes={"messaging.destination": plan.topic, "signal.source": event.source}
+        ):
+            try:
+                future = self.producer.send(plan.topic, key=event.source, value=plan.payload, headers=plan.headers)
+                future.add_callback(self._delivery_callback(event.source))
+                future.add_errback(lambda e: self._delivery_callback(event.source)(exception=e))
+                return future
+            except KafkaError as e:
+                logger.error("Error producing event: %s", e)
+                KAFKA_ERRORS.labels(error_type=type(e).__name__).inc()
+                raise
 
     def produce_batch(self, events: List[Event]):
         futures = [self.produce_event(event) for event in events]

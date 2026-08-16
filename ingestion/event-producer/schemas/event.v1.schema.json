@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://signal-intel.local/schemas/event.v1.schema.json",
+  "title": "SignalEvent",
+  "description": "Canonical envelope for a single telemetry event published to the `signal.events.v1` Kafka topic by the event-producer. Every downstream job (aggregation, anomaly-detection, session-analytics) assumes this shape.",
+  "type": "object",
+  "required": ["event_id", "schema_version", "source", "timestamp", "attributes"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "UUIDv4 assigned by the producer. Used as the Kafka message key is `source`, not this — event_id is for idempotency/tracing.",
+      "minLength": 1
+    },
+    "schema_version": {
+      "type": "string",
+      "description": "Envelope schema version. Consumers should branch on this if the shape ever changes, rather than assuming the latest shape.",
+      "enum": ["2.0"]
+    },
+    "source": {
+      "type": "string",
+      "description": "Origin of the event.",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "description": "Event time in RFC 3339 / ISO 8601, UTC.",
+      "format": "date-time"
+    },
+    "attributes": {
+      "type": "object",
+      "description": "Source-specific payload. Deliberately permissive (additionalProperties: true) — this is where per-source enrichment lives — but the fields consumed by the streaming jobs are constrained below.",
+      "additionalProperties": true,
+      "properties": {
+        "metric": { "type": "number" },
+        "status": { "type": "string", "enum": ["ok", "warning", "error"] },
+        "user_id": { "type": "string", "description": "SHA-256 hash, not the raw identifier (see docs/SECURITY.md)." },
+        "session_id": { "type": "string" },
+        "funnel_step": {
+          "type": "string",
+          "enum": ["landing", "product_view", "add_to_cart", "checkout", "purchase"]
+        },
+        "region": { "type": "string" }
+      }
+    }
+  }
+}

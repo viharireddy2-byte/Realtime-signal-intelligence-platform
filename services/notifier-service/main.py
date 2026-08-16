@@ -13,6 +13,7 @@ data-plane and infra-plane alerts land in one place.
 import asyncio
 import json
 import logging
+import os
 import signal
 import sys
 import threading
@@ -26,17 +27,23 @@ import smtplib
 from email.mime.text import MIMEText
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from kafka import KafkaConsumer
+from kafka import KafkaConsumer, KafkaProducer
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from psycopg2.extras import RealDictCursor
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
+
+from opentelemetry import propagate, trace
 
 from config import settings
+from logging_config import CorrelationIdMiddleware, configure_logging, correlation_id_var
+from schema_validation import validate_alert
+from tracing import instrument_fastapi_app
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s [notifier-service] %(message)s"
-)
+configure_logging("notifier-service")
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer("notifier-service")
+
+DLQ_TOPIC = os.getenv("ALERTS_DLQ_TOPIC", "signal.alerts.dlq")
 
 # --------------------------------------------------------------------------
 # Prometheus metrics
@@ -45,6 +52,7 @@ ALERTS_PROCESSED = Counter("notifier_alerts_processed_total", "Total alerts proc
 NOTIFICATIONS_SENT = Counter("notifier_notifications_sent_total", "Total notifications sent", ["channel", "status"])
 ALERT_PROCESSING_TIME = Histogram("notifier_alert_processing_seconds", "Time spent processing an alert")
 ACTIVE_ALERTS = Gauge("notifier_active_alerts", "Number of unresolved alerts in the last hour", ["severity"])
+ALERTS_DLQ = Counter("notifier_alerts_dlq_total", "Alerts that failed schema validation and were routed to the DLQ topic", ["source"])
 
 
 # --------------------------------------------------------------------------
@@ -94,10 +102,51 @@ class NotifierService:
             "group_id": settings.consumer_group_id,
             "auto_offset_reset": "latest",
             "enable_auto_commit": True,
-            "value_deserializer": lambda x: json.loads(x.decode("utf-8")),
+            # Deliberately *not* deserializing to JSON here: if a single
+            # message on the topic has a body that isn't valid JSON, doing
+            # the json.loads() inside the deserializer means kafka-python
+            # raises while *iterating* the consumer, outside the per-message
+            # try/except in consume_alerts() below -- that used to be able
+            # to kill the whole consumer thread on one bad message. Raw
+            # bytes are decoded and parsed explicitly per-message instead,
+            # so a malformed message is routed to the DLQ topic and the
+            # consumer keeps running.
+            "value_deserializer": lambda x: x,
         }
 
         self._http_session: Optional[aiohttp.ClientSession] = None
+        self._dlq_producer: Optional[KafkaProducer] = None
+
+    def _get_dlq_producer(self) -> KafkaProducer:
+        if self._dlq_producer is None:
+            self._dlq_producer = KafkaProducer(
+                bootstrap_servers=settings.kafka_bootstrap_servers.split(","),
+                value_serializer=lambda v: v.encode("utf-8"),
+                key_serializer=lambda k: k.encode("utf-8") if k else None,
+            )
+        return self._dlq_producer
+
+    def _send_to_dlq(self, raw_key: Optional[bytes], reason: str, raw_value: bytes, source: str = "unknown") -> None:
+        """Route an unparseable/invalid alert message to signal.alerts.dlq
+        instead of dropping it. Never raises -- a DLQ producer error should
+        be logged, not take down the consumer loop."""
+        ALERTS_DLQ.labels(source=source).inc()
+        try:
+            payload = json.dumps(
+                {
+                    "error": reason,
+                    "failed_at": datetime.utcnow().isoformat(),
+                    "original_topic": settings.alerts_topic,
+                    "raw_value": raw_value.decode("utf-8", errors="replace"),
+                },
+                separators=(",", ":"),
+            )
+            key = raw_key.decode("utf-8", errors="replace") if raw_key else None
+            self._get_dlq_producer().send(DLQ_TOPIC, key=key, value=payload)
+            self._get_dlq_producer().flush(timeout=5)
+            logger.warning("Routed unprocessable alert message to DLQ topic '%s': %s", DLQ_TOPIC, reason)
+        except Exception as e:
+            logger.error("Failed to publish to DLQ topic '%s' (message is dropped): %s", DLQ_TOPIC, e)
 
     @staticmethod
     def _load_alert_rules() -> List[AlertRule]:
@@ -122,6 +171,8 @@ class NotifierService:
         self.running = False
         if self._http_session:
             await self._http_session.close()
+        if self._dlq_producer:
+            self._dlq_producer.close()
         logger.info("Notifier service stopped")
 
     def _start_kafka_consumer_thread(self):
@@ -134,11 +185,49 @@ class NotifierService:
                 for message in consumer:
                     if not self.running:
                         break
+
+                    header_dict = {k: v.decode("utf-8", errors="replace") for k, v in (message.headers or [])}
+                    correlation_id = header_dict.get("correlation_id") or header_dict.get("x-correlation-id")
+                    token = correlation_id_var.set(correlation_id) if correlation_id else None
+                    trace_ctx = propagate.extract(header_dict) if header_dict else None
+
                     try:
-                        alert = AlertPayload(**message.value)
-                        loop.run_until_complete(self.process_alert(alert))
+                        with tracer.start_as_current_span(
+                            "process_alert_message", context=trace_ctx,
+                            attributes={"messaging.source": settings.alerts_topic},
+                        ):
+                            # Step 1: is it even JSON?
+                            try:
+                                parsed: Dict[str, Any] = json.loads(message.value.decode("utf-8"))
+                            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                                self._send_to_dlq(message.key, f"invalid JSON: {e}", message.value)
+                                continue
+
+                            # Step 2: does it match the alert.v1 data contract?
+                            is_valid, schema_error = validate_alert(parsed)
+                            if not is_valid:
+                                self._send_to_dlq(
+                                    message.key, f"schema validation failed: {schema_error}", message.value,
+                                    source=str(parsed.get("source", "unknown")),
+                                )
+                                continue
+
+                            # Step 3: build the Pydantic model used by the rest of the service.
+                            try:
+                                alert = AlertPayload(**parsed)
+                            except ValidationError as e:
+                                self._send_to_dlq(
+                                    message.key, f"pydantic validation failed: {e}", message.value,
+                                    source=str(parsed.get("source", "unknown")),
+                                )
+                                continue
+
+                            loop.run_until_complete(self.process_alert(alert))
                     except Exception as e:
-                        logger.error("Error processing alert message: %s", e)
+                        logger.error("Unexpected error processing alert message: %s", e)
+                    finally:
+                        if token is not None:
+                            correlation_id_var.reset(token)
             except Exception as e:
                 logger.error("Kafka consumer error: %s", e)
             finally:
@@ -356,6 +445,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -363,6 +453,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+instrument_fastapi_app(app, "notifier-service")
 
 
 @app.get("/health")

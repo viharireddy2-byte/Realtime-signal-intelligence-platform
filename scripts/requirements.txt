@@ -1,0 +1,5 @@
+# Dependencies for the standalone utility scripts in this directory
+# (dlq_inspect.py, benchmark_producer.py). Not used by any deployed
+# service -- those pin their own requirements.txt independently.
+kafka-python==2.0.2
+jsonschema==4.21.1

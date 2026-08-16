@@ -37,11 +37,11 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from config import settings
+from logging_config import CorrelationIdMiddleware, configure_logging
 from security import require_api_key
+from tracing import instrument_fastapi_app
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s [query-api] %(message)s"
-)
+configure_logging("query-api")
 logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------
@@ -168,6 +168,7 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "*").split(","),
@@ -175,6 +176,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+instrument_fastapi_app(app, "query-api")
 
 
 def get_redis() -> redis.Redis:
