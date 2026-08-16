@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars and fill in, or pass equivalent -var flags / env
+# vars (TF_VAR_postgres_master_password=...). Do not commit terraform.tfvars
+# with a real password in it -- .gitignore already excludes it.
+
+project_name     = "signal-intel"
+aws_region       = "us-east-1"
+environment_size = "small" # "small" | "medium" | "large" -- see docs/COST.md
+
+vpc_cidr                = "10.42.0.0/16"
+availability_zone_count = 3
+kubernetes_version      = "1.29"
+
+postgres_master_username = "signalintel_admin"
+# postgres_master_password -- intentionally not set here; pass via
+# TF_VAR_postgres_master_password or a real secrets manager, not a file.

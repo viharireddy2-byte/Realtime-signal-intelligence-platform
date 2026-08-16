@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [query-api, notifier-service, live-dashboard]
+        service: [query-api, notifier-service, live-dashboard, event-producer]
         include:
           - service: query-api
             path: services/query-api
@@ -26,6 +26,8 @@ jobs:
             path: services/notifier-service
           - service: live-dashboard
             path: services/live-dashboard
+          - service: event-producer
+            path: ingestion/event-producer
 
     steps:
       - uses: actions/checkout@v4
@@ -109,6 +111,77 @@ jobs:
         with:
           name: ${{ matrix.job }}-jar
           path: streaming-jobs/${{ matrix.job }}/target/*.jar
+
+  # -------------------------------------------------------------------
+  # Helm chart validation. `helm lint` + `helm template` both run
+  # entirely offline (no cluster needed) and would have caught the
+  # selectorLabels `$`-scoping bug fixed in _helpers.tpl -- every
+  # Deployment/Service template failed to render before that fix,
+  # meaning `helm install` would have failed for every service. This
+  # job exists so that class of bug fails CI instead of a deploy.
+  # -------------------------------------------------------------------
+  helm-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.14.4'
+
+      - name: helm lint
+        run: helm lint infra/helm/signal-intel-platform
+
+      - name: helm template (renders every template with default values)
+        run: helm template signal-intel infra/helm/signal-intel-platform > /tmp/rendered.yaml
+
+      - name: helm template (autoscaling disabled, tracing disabled -- exercises the conditional branches)
+        run: |
+          helm template signal-intel infra/helm/signal-intel-platform \
+            --set autoscaling.enabled=false \
+            --set observability.tracing.enabled=false > /tmp/rendered-alt.yaml
+
+      - name: Validate rendered manifests are well-formed YAML
+        run: |
+          python3 -c "
+          import sys, yaml
+          for path in ['/tmp/rendered.yaml', '/tmp/rendered-alt.yaml']:
+              docs = list(yaml.safe_load_all(open(path)))
+              print(f'{path}: {len(docs)} documents parsed OK')
+          "
+
+  # -------------------------------------------------------------------
+  # Terraform validation. `terraform validate` is schema-aware (it knows
+  # every argument aws_msk_cluster etc. actually accepts) in a way the
+  # hcl2-parse-only check used during development is not -- this is the
+  # real check. Runs with no AWS credentials (`validate` only needs the
+  # provider plugin, not a live account) so it's safe to run on every PR.
+  # -------------------------------------------------------------------
+  terraform-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.7.5'
+
+      - name: terraform fmt -check
+        # Informational, not blocking: these files were hand-written without
+        # a local `terraform` binary to run `fmt` against first (see
+        # infra/terraform/README.md), so a first-run formatting nit
+        # shouldn't fail the pipeline. Run `terraform fmt -recursive
+        # infra/terraform` once locally and this becomes a real gate.
+        continue-on-error: true
+        run: terraform fmt -check -recursive infra/terraform
+
+      - name: terraform init (no backend, no credentials needed)
+        run: terraform -chdir=infra/terraform init -backend=false
+
+      - name: terraform validate
+        run: terraform -chdir=infra/terraform validate
 
   # -------------------------------------------------------------------
   # k6 load-test script validation
@@ -280,7 +353,7 @@ jobs:
   # Deploy (staging -> load test -> production), main branch only
   # -------------------------------------------------------------------
   deploy-staging:
-    needs: [integration-tests, security-scan]
+    needs: [integration-tests, security-scan, helm-validate]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment: staging
