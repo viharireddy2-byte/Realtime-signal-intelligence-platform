@@ -130,6 +130,21 @@ jobs:
         with:
           version: 'v3.14.4'
 
+      - name: Add chart dependency repos
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo update
+
+      # Chart.yaml declares kafka/redis/postgresql/prometheus/grafana as
+      # dependencies but the .tgz subcharts aren't vendored in the repo
+      # (no charts/ dir, no Chart.lock). Without this, both `helm lint`
+      # and `helm template` below fail with:
+      #   "found in Chart.yaml, but missing in charts/ directory: ..."
+      - name: helm dependency update
+        run: helm dependency update infra/helm/signal-intel-platform
+
       - name: helm lint
         run: helm lint infra/helm/signal-intel-platform
 
@@ -333,16 +348,35 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
 
+    permissions:
+      contents: read
+      security-events: write
+
     steps:
       - uses: actions/checkout@v4
 
+      # Cache the vulnerability DB across runs. `@master` was floating and
+      # re-pulling the full DB from ghcr.io/aquasecurity/trivy-db on every
+      # run, which regularly hit ghcr.io's anonymous-pull rate limit
+      # (TOOMANYREQUESTS) and failed this step with exit code 1. Pinning to
+      # a released version plus caching avoids both the surprise-breakage
+      # risk of `@master` and the repeated cold downloads.
+      - name: Cache Trivy DB
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: ${{ runner.os }}-trivy-db-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-trivy-db-
+
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'sarif'
           output: 'trivy-results.sarif'
+          cache: 'true'
 
       - name: Upload Trivy scan results
         uses: github/codeql-action/upload-sarif@v3
@@ -423,11 +457,27 @@ jobs:
   cleanup:
     needs: [deploy-production]
     runs-on: ubuntu-latest
-    if: always()
+    # `always()` bypasses the implicit "needs succeeded" check entirely, so
+    # this used to run even on PR runs where build-images/deploy-production
+    # never run (they're gated on github.event_name == 'push') and no image
+    # was ever pushed. Scope it back to push events, matching the jobs it
+    # depends on.
+    if: always() && github.event_name == 'push'
+
+    permissions:
+      packages: write
 
     steps:
+      # On the very first successful push, ghcr.io has no
+      # "signal-intel-platform-query-api" package yet, so the API this
+      # action calls 404s with "get versions API failed. Package not
+      # found." Don't fail the whole pipeline over that -- there's simply
+      # nothing to clean up yet. From the second successful push onward
+      # (once build-images has pushed at least one version) this step
+      # does real work.
       - name: Delete old container images
         uses: actions/delete-package-versions@v5
+        continue-on-error: true
         with:
           package-name: 'signal-intel-platform-query-api'
           package-type: 'container'
