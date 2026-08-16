@@ -1,0 +1,20 @@
+{
+  "benchmark": "producer-generation-and-serialization",
+  "scope": "EventGenerator.generate_event() + schema validation + Event.to_json(). No Kafka connection, no network I/O. NOT an end-to-end throughput number -- see docs/BENCHMARKS.md for how to measure the full pipeline with loadtests/k6-scripts/.",
+  "measured_at": "2026-08-16T17:32:19.673536+00:00",
+  "git_commit": "b0baaa4",
+  "environment": {
+    "python_version": "3.11.15",
+    "platform": "Linux-6.18.5-fc-v20-x86_64-with-glibc2.39",
+    "cpu_count": 2
+  },
+  "events_generated": 50000,
+  "total_seconds": 7.1462,
+  "events_per_second": 6996.8,
+  "per_event_latency_microseconds": {
+    "p50": 137.81,
+    "p95": 168.66,
+    "p99": 200.31,
+    "mean": 142.64
+  }
+}
