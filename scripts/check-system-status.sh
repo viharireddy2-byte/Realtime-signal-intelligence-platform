@@ -148,6 +148,7 @@ run_all_checks() {
     check_service "signal-prometheus" || true
     check_service "signal-grafana" || true
     check_service "signal-alertmanager" || true
+    check_service "signal-jaeger" || true
     echo ""
 
     print_status "Connectivity..."
@@ -163,6 +164,7 @@ run_all_checks() {
     check_http_endpoint "Flink Dashboard" "http://localhost:8081" || true
     check_http_endpoint "Grafana" "http://localhost:3000" || true
     check_http_endpoint "Prometheus" "http://localhost:9090" || true
+    check_http_endpoint "Jaeger" "http://localhost:16686" || true
     echo ""
 
     test_api_functionality

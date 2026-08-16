@@ -60,6 +60,19 @@ mvnw.cmd
 charts/*/charts/
 charts/*/requirements.lock
 
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+terraform.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
 # Logs
 *.log
 logs/

@@ -81,6 +81,59 @@ Redis serves the `/kpi` hot path: callers asking "what's happening right now" ge
 
 Every service is configured entirely through environment variables (see each service's `config.py` or the `System.getenv()` calls in the Java jobs), with defaults that match the docker-compose stack. There is no shared config file and no service discovery beyond DNS names within the Docker/Kubernetes network — the same container images run unmodified in docker-compose, Helm, and local development. Application state lives in exactly three places: Kafka (the event log and inter-job messaging), Flink's own keyed state (rolling statistics for anomaly detection, checkpointed to the configured state backend for fault tolerance), and the two persistent stores (Redis, TimescaleDB). No service holds authoritative state in process memory that isn't recoverable from one of those three places, other than the notifier-service's alert-cooldown map, which is intentionally best-effort (a restart just means one extra notification might fire for an alert still in its cooldown window — a deliberate tradeoff of simplicity over exactness for a non-critical dedup mechanism).
 
+## Data contracts and dead-letter queues
+
+`event-producer` and `notifier-service` validate every message they publish
+or consume against a JSON Schema (`schemas/event.v1.schema.json`,
+`schemas/alert.v1.schema.json` — see [`schemas/README.md`](../schemas/README.md)
+for why the schema files are duplicated per service rather than imported
+from one shared package). A message that fails validation is never silently
+dropped and never crashes the consumer loop: it's routed to a
+corresponding `*.dlq` topic (`signal.events.dlq`, `signal.alerts.dlq`) with
+the validation error and original payload attached, and a Prometheus
+counter (`signal_events_dlq_total`, `notifier_alerts_dlq_total`)
+increments so it shows up on a dashboard instead of only in logs.
+[`scripts/dlq_inspect.py`](../scripts/dlq_inspect.py) inspects or replays
+what's sitting in a DLQ topic once the root cause is fixed.
+
+This matters in a Kafka pipeline specifically because there's no schema
+registry enforcing the contract at write time (see "Follow-up work"
+below) — the JVM streaming jobs and the Python services agree on the wire
+format by convention, checked at each Python service's boundary, not by a
+broker-enforced schema. Malformed data reaching a downstream job is a
+"when," not an "if," in any Kafka pipeline that grows past one team; the
+DLQ pattern is what keeps that a Tuesday-afternoon investigation instead
+of a page.
+
+## Observability: metrics, traces, and logs
+
+- **Metrics** (Prometheus): every service has always exported these; unchanged.
+- **Traces** (OpenTelemetry -> Jaeger): each Python service's `tracing.py`
+  auto-instruments its FastAPI routes (query-api, notifier-service) or
+  wraps the hot path in manual spans (event-producer's `produce_event`).
+  event-producer injects the current trace context and a `correlation_id`
+  into Kafka message headers (`tracing.kafka_trace_headers()`);
+  notifier-service extracts them on the consumer side
+  (`opentelemetry.propagate.extract`) so a trace that starts at the HTTP
+  edge of one service can continue into a Kafka-triggered handler in
+  another. **Follow-up work:** the Flink/Spark (JVM) jobs don't read or
+  forward those headers yet, so today a trace started in event-producer
+  ends at the Kafka write, and any trace touching the JVM jobs' output
+  (e.g. `signal.alerts.v1`) starts fresh in notifier-service. Propagating
+  context through the JVM jobs (e.g. via a small header-forwarding
+  `MapFunction`) is the natural next step.
+- **Logs**: every service's `logging_config.py` binds a correlation ID
+  (from an inbound `X-Correlation-ID` HTTP header, or a Kafka message's
+  `correlation_id` header) to a contextvar for the duration of a
+  request/message, so every log line emitted while handling it is
+  attributable without a tracing backend open. `LOG_FORMAT=json` switches
+  from the human-readable local-dev format to one-JSON-object-per-line for
+  a real log aggregator (Loki/CloudWatch/ELK).
+
+See [`docs/OBSERVABILITY.md`](OBSERVABILITY.md) for the env vars that
+control all of this and how to look at a trace/log for one request in
+practice.
+
 ## Deliberate tradeoffs (and what to change for a hardened deployment)
 
 See the "Known limitations & honest next steps" section in the root [`README.md`](../README.md) for the specific list (single-broker Kafka, shared-secret API auth, unauthenticated Kafka listeners, placeholder Helm secrets, no schema-migration tool). Each of those is a reasonable choice for a local/demo deployment and a real gap for production — the README calls them out explicitly rather than leaving them implicit.

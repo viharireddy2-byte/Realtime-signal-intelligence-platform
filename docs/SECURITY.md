@@ -18,6 +18,8 @@ This is a shared secret, not identity-aware auth — it tells you a request came
 
 `ingestion/event-producer/event_producer.py` hashes `user_id` with SHA-256 (truncated to 16 hex chars) before the event is ever serialized to Kafka — raw user identifiers never enter the pipeline. See `EventGenerator._hash_user_id`.
 
+This holds for the DLQ path too: a malformed event routed to `signal.events.dlq` still only ever contains the already-hashed `user_id`, since hashing happens before validation runs, not after. `signal.events.dlq` and `signal.alerts.dlq` are ordinary Kafka topics with no separate access-control or retention policy from their primary topics today — anyone who can read `signal.events.v1` can read `signal.events.dlq`. If DLQ payloads ever carry something more sensitive than they do now, that would need to change.
+
 ### Non-root containers
 
 Every Dockerfile in this repo creates and switches to a non-root `appuser` (UID 1000) before running the application.
