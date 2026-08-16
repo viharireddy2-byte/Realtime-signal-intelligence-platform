@@ -1,0 +1,99 @@
+# OS
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+build/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+.env
+.venv
+env/
+venv/
+ENV/
+.pytest_cache/
+.coverage
+coverage/
+*.lcov
+
+# Node (live-dashboard has none today, but keep this clean if that changes)
+node_modules/
+npm-debug.log*
+
+# Java / Maven
+*.class
+*.jar
+*.war
+target/
+.mvn/
+mvnw
+mvnw.cmd
+
+# IDE project files
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+
+# Docker
+.dockerignore
+
+# Kubernetes / Helm
+*.kubeconfig
+charts/*/charts/
+charts/*/requirements.lock
+
+# Logs
+*.log
+logs/
+
+# Local data volumes (if bind-mounted instead of named volumes)
+data/kafka/
+data/zookeeper/
+data/redis/
+data/timescaledb/
+data/elasticsearch/
+data/prometheus/
+data/grafana/
+data/flink/
+kafka-logs/
+zookeeper-data/
+dump.rdb
+flink-checkpoints/
+flink-savepoints/
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Load test results
+loadtest-results/
+system-status-report-*.txt
+
+# Secrets / local overrides
+*.pem
+*.key
+*.crt
+*.csr
+!*.example.*
+docker-compose.override.yml
+values-local.yaml
+values-production.yaml
+config-local.*
+.env.local

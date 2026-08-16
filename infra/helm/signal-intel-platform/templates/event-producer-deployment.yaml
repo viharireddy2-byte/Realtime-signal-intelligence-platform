@@ -1,0 +1,44 @@
+{{- if .Values.services.eventProducer.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-event-producer
+  labels:
+    {{- include "signal-intel-platform.labels" . | nindent 4 }}
+    {{- include "signal-intel-platform.selectorLabels" "event-producer" | nindent 4 }}
+spec:
+  replicas: {{ .Values.services.eventProducer.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "signal-intel-platform.selectorLabels" "event-producer" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "signal-intel-platform.selectorLabels" "event-producer" | nindent 8 }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: event-producer
+          image: {{ include "signal-intel-platform.image" (dict "root" $ "repository" .Values.services.eventProducer.image.repository "tag" .Values.services.eventProducer.image.tag) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args:
+            - "event_producer.py"
+            - "--rate"
+            - {{ .Values.services.eventProducer.config.eventsPerSecond | quote }}
+            {{- if .Values.services.eventProducer.config.duration }}
+            - "--duration"
+            - {{ .Values.services.eventProducer.config.duration | quote }}
+            {{- end }}
+            - "--metrics-port"
+            - {{ .Values.services.eventProducer.containerPort | quote }}
+          ports:
+            - containerPort: {{ .Values.services.eventProducer.containerPort }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-config
+          resources:
+            {{- toYaml .Values.services.eventProducer.resources | nindent 12 }}
+{{- end }}

@@ -1,0 +1,21 @@
+Signal Intelligence Platform ({{ .Chart.AppVersion }}) has been deployed.
+
+1. Query API:
+{{- if .Values.services.queryApi.ingress.enabled }}
+   http://{{ (index .Values.services.queryApi.ingress.hosts 0).host }}
+{{- else }}
+   kubectl port-forward svc/{{ .Release.Name }}-query-api {{ .Values.services.queryApi.service.port }}:{{ .Values.services.queryApi.service.port }} -n {{ .Release.Namespace }}
+{{- end }}
+
+2. Live dashboard:
+   kubectl port-forward svc/{{ .Release.Name }}-live-dashboard {{ .Values.services.liveDashboard.service.port }}:{{ .Values.services.liveDashboard.service.port }} -n {{ .Release.Namespace }}
+
+3. Submit the Flink and Spark jobs (see streaming-jobs/README.md and
+   docs/DEPLOYMENT.md for the kubectl/flink/spark-submit commands — this
+   chart provisions the clusters but does not auto-submit jobs, since job
+   JARs are built and versioned independently of the Helm release).
+
+4. IMPORTANT: the default values.yaml ships placeholder credentials
+   (postgresql.auth.password, secrets.apiKey.value). Override them via
+   --set or a values-production.yaml backed by your real secret manager
+   before deploying anywhere but a local/dev cluster. See docs/SECURITY.md.

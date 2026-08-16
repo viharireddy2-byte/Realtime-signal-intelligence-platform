@@ -1,0 +1,47 @@
+{
+  "title": "Signal Intelligence Platform — Anomaly Detection",
+  "uid": "signal-intel-anomalies",
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "browser",
+  "refresh": "10s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Active (unresolved) alerts by severity",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "notifier_active_alerts", "legendFormat": "{{severity}}", "refId": "A" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Notifications sent by channel",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "targets": [
+        {
+          "expr": "sum(rate(notifier_notifications_sent_total{status=\"success\"}[5m])) by (channel)",
+          "legendFormat": "{{channel}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Recent anomalies (TimescaleDB)",
+      "type": "table",
+      "datasource": { "type": "postgres", "uid": "TimescaleDB" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "targets": [
+        {
+          "rawSql": "SELECT ts, source, anomaly_type, severity, value, z_score, description FROM anomalies ORDER BY ts DESC LIMIT 50",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

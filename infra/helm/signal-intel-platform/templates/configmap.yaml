@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+  labels:
+    {{- include "signal-intel-platform.labels" . | nindent 4 }}
+data:
+  KAFKA_BOOTSTRAP_SERVERS: {{ .Values.config.kafka.bootstrapServers | quote }}
+  REDIS_HOST: {{ .Values.config.redis.host | quote }}
+  REDIS_PORT: {{ .Values.config.redis.port | quote }}
+  POSTGRES_HOST: {{ .Values.config.postgresql.host | quote }}
+  POSTGRES_PORT: {{ .Values.config.postgresql.port | quote }}
+  POSTGRES_DB: {{ .Values.config.postgresql.database | quote }}
+  POSTGRES_USER: {{ .Values.config.postgresql.username | quote }}
+  EVENTS_TOPIC: "signal.events.v1"
+  ALERTS_TOPIC: "signal.alerts.v1"

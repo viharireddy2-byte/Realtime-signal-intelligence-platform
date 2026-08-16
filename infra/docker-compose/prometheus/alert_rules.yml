@@ -1,0 +1,50 @@
+groups:
+  - name: signal-intel-platform
+    rules:
+      - alert: QueryAPIHighErrorRate
+        expr: |
+          sum(rate(query_api_requests_total{status="error"}[5m]))
+            /
+          sum(rate(query_api_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "query-api error rate above 5%"
+          description: "More than 5% of query-api requests have failed over the last 5 minutes."
+
+      - alert: QueryAPIHighLatency
+        expr: histogram_quantile(0.95, sum(rate(query_api_request_duration_seconds_bucket[5m])) by (le, endpoint)) > 0.15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "query-api p95 latency above 150ms"
+          description: "{{ $labels.endpoint }} p95 latency has exceeded the 150ms SLO for 5 minutes."
+
+      - alert: EventProducerStalled
+        expr: rate(signal_events_produced_total[5m]) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Event producer has stopped producing events"
+          description: "No events have been produced in the last 2 minutes."
+
+      - alert: NotifierServiceDown
+        expr: up{job="notifier-service"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "notifier-service is unreachable"
+          description: "Prometheus has not been able to scrape notifier-service for 1 minute."
+
+      - alert: HighAnomalyVolume
+        expr: sum(increase(notifier_alerts_processed_total{severity="critical"}[10m])) > 25
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unusually high volume of critical anomalies"
+          description: "More than 25 critical anomalies were recorded in the last 10 minutes — check for a systemic issue rather than isolated outliers."

@@ -1,0 +1,328 @@
+version: '3.8'
+
+name: signal-intel-platform
+
+services:
+  # ---------------------------------------------------------------------
+  # Messaging backbone
+  # ---------------------------------------------------------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.3
+    container_name: signal-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    networks: [signal-intel-network]
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.3
+    container_name: signal-kafka
+    depends_on: [zookeeper]
+    ports:
+      - "9092:9092"
+      - "9997:9997"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_JMX_PORT: 9997
+      KAFKA_JMX_HOSTNAME: kafka
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks: [signal-intel-network]
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: signal-kafka-ui
+    depends_on: [kafka]
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: signal-intel-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      KAFKA_CLUSTERS_0_JMXPORT: 9997
+    networks: [signal-intel-network]
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    container_name: signal-kafka-exporter
+    depends_on: [kafka]
+    command: ["--kafka.server=kafka:29092"]
+    ports:
+      - "9308:9308"
+    networks: [signal-intel-network]
+
+  # ---------------------------------------------------------------------
+  # Storage
+  # ---------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: signal-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks: [signal-intel-network]
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: signal-redis-exporter
+    depends_on: [redis]
+    environment:
+      REDIS_ADDR: "redis:6379"
+    ports:
+      - "9121:9121"
+    networks: [signal-intel-network]
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: signal-timescaledb
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: signalintel
+      POSTGRES_USER: signalintel_admin
+      POSTGRES_PASSWORD: password
+    volumes:
+      - timescaledb-data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    networks: [signal-intel-network]
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: signal-postgres-exporter
+    depends_on: [timescaledb]
+    environment:
+      DATA_SOURCE_NAME: "postgresql://signalintel_admin:password@timescaledb:5432/signalintel?sslmode=disable"
+    ports:
+      - "9187:9187"
+    networks: [signal-intel-network]
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.1
+    container_name: signal-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks: [signal-intel-network]
+
+  # ---------------------------------------------------------------------
+  # Stream processing — Flink (aggregation-job, anomaly-detection-job)
+  # ---------------------------------------------------------------------
+  flink-jobmanager:
+    image: flink:1.17-scala_2.12-java11
+    container_name: signal-flink-jobmanager
+    ports:
+      - "8081:8081"
+    command: jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 4
+        parallelism.default: 2
+        state.backend: filesystem
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        state.savepoints.dir: file:///tmp/flink-savepoints
+        metrics.reporter.prometheus.class: org.apache.flink.metrics.prometheus.PrometheusReporter
+        metrics.reporter.prometheus.port: 9249
+    volumes:
+      - flink-checkpoints:/tmp/flink-checkpoints
+      - flink-savepoints:/tmp/flink-savepoints
+      - ../../streaming-jobs/aggregation-job/target:/opt/flink/usrlib/aggregation-job
+      - ../../streaming-jobs/anomaly-detection-job/target:/opt/flink/usrlib/anomaly-detection-job
+    networks: [signal-intel-network]
+
+  flink-taskmanager:
+    image: flink:1.17-scala_2.12-java11
+    depends_on: [flink-jobmanager]
+    command: taskmanager
+    deploy:
+      replicas: 2
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 4
+        parallelism.default: 2
+        state.backend: filesystem
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        state.savepoints.dir: file:///tmp/flink-savepoints
+        metrics.reporter.prometheus.class: org.apache.flink.metrics.prometheus.PrometheusReporter
+        metrics.reporter.prometheus.port: 9249
+    volumes:
+      - flink-checkpoints:/tmp/flink-checkpoints
+      - flink-savepoints:/tmp/flink-savepoints
+    networks: [signal-intel-network]
+
+  # ---------------------------------------------------------------------
+  # Stream processing — Spark (session-analytics-job)
+  # ---------------------------------------------------------------------
+  spark-master:
+    image: bitnami/spark:3.5
+    container_name: signal-spark-master
+    environment:
+      SPARK_MODE: master
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+    ports:
+      - "8082:8080"  # Spark master UI
+      - "7077:7077"  # Spark master RPC
+    volumes:
+      - ../../streaming-jobs/session-analytics-job/target:/opt/spark-apps
+    networks: [signal-intel-network]
+
+  spark-worker:
+    image: bitnami/spark:3.5
+    container_name: signal-spark-worker
+    depends_on: [spark-master]
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 2G
+      SPARK_WORKER_CORES: 2
+    ports:
+      - "8083:8081"  # Spark worker UI
+    volumes:
+      - ../../streaming-jobs/session-analytics-job/target:/opt/spark-apps
+    networks: [signal-intel-network]
+
+  # ---------------------------------------------------------------------
+  # Observability
+  # ---------------------------------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: signal-node-exporter
+    ports:
+      - "9100:9100"
+    networks: [signal-intel-network]
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: signal-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks: [signal-intel-network]
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: signal-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    networks: [signal-intel-network]
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: signal-alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    networks: [signal-intel-network]
+
+  # ---------------------------------------------------------------------
+  # Application services
+  # ---------------------------------------------------------------------
+  event-producer:
+    build:
+      context: ../../ingestion/event-producer
+    container_name: signal-event-producer
+    depends_on: [kafka]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    ports:
+      - "8002:8002"
+    command: ["python", "event_producer.py", "--bootstrap-servers", "kafka:29092", "--rate", "100", "--metrics-port", "8002"]
+    networks: [signal-intel-network]
+
+  query-api:
+    build:
+      context: ../../services/query-api
+    container_name: signal-query-api
+    depends_on: [redis, timescaledb]
+    environment:
+      REDIS_HOST: redis
+      POSTGRES_HOST: timescaledb
+      POSTGRES_DB: signalintel
+      POSTGRES_USER: signalintel_admin
+      POSTGRES_PASSWORD: password
+      API_KEY_REQUIRED: "false"
+    ports:
+      - "8000:8000"
+    networks: [signal-intel-network]
+
+  notifier-service:
+    build:
+      context: ../../services/notifier-service
+    container_name: signal-notifier-service
+    depends_on: [kafka, timescaledb]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      POSTGRES_HOST: timescaledb
+      POSTGRES_DB: signalintel
+      POSTGRES_USER: signalintel_admin
+      POSTGRES_PASSWORD: password
+    ports:
+      - "8001:8001"
+    networks: [signal-intel-network]
+
+  live-dashboard:
+    build:
+      context: ../../services/live-dashboard
+    container_name: signal-live-dashboard
+    depends_on: [query-api]
+    environment:
+      QUERY_API_WS_URL: ws://localhost:8000/ws/live
+      QUERY_API_HTTP_URL: http://localhost:8000
+    ports:
+      - "8003:8003"
+    networks: [signal-intel-network]
+
+volumes:
+  zookeeper-data:
+  zookeeper-logs:
+  kafka-data:
+  redis-data:
+  timescaledb-data:
+  elasticsearch-data:
+  flink-checkpoints:
+  flink-savepoints:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  signal-intel-network:
+    driver: bridge

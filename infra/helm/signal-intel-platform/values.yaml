@@ -1,0 +1,311 @@
+# Default values for signal-intel-platform.
+
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+image:
+  registry: ghcr.io
+  repository: YOUR_GITHUB_USERNAME/signal-intel-platform
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  capabilities:
+    drop: ["ALL"]
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# ---------------------------------------------------------------------
+# Application services
+# ---------------------------------------------------------------------
+services:
+  queryApi:
+    enabled: true
+    name: query-api
+    replicaCount: 2
+    image:
+      repository: query-api
+      tag: "latest"
+    containerPort: 8000
+    service:
+      type: ClusterIP
+      port: 8000
+    ingress:
+      enabled: true
+      className: "nginx"
+      annotations:
+        nginx.ingress.kubernetes.io/rewrite-target: /
+      hosts:
+        - host: api.signal-intel.local
+          paths:
+            - path: /
+              pathType: Prefix
+      tls: []
+    env:
+      API_KEY_REQUIRED: "false"
+    resources:
+      limits: { cpu: 1000m, memory: 2Gi }
+      requests: { cpu: 500m, memory: 1Gi }
+
+  notifierService:
+    enabled: true
+    name: notifier-service
+    replicaCount: 1
+    image:
+      repository: notifier-service
+      tag: "latest"
+    containerPort: 8001
+    service:
+      type: ClusterIP
+      port: 8001
+    resources:
+      limits: { cpu: 500m, memory: 1Gi }
+      requests: { cpu: 250m, memory: 512Mi }
+
+  liveDashboard:
+    enabled: true
+    name: live-dashboard
+    replicaCount: 1
+    image:
+      repository: live-dashboard
+      tag: "latest"
+    containerPort: 8003
+    service:
+      type: ClusterIP
+      port: 8003
+    ingress:
+      enabled: false
+    resources:
+      limits: { cpu: 250m, memory: 256Mi }
+      requests: { cpu: 100m, memory: 128Mi }
+
+  eventProducer:
+    enabled: true
+    name: event-producer
+    replicaCount: 1
+    image:
+      repository: event-producer
+      tag: "latest"
+    containerPort: 8002
+    config:
+      eventsPerSecond: 100
+      duration: ""  # infinite by default
+    resources:
+      limits: { cpu: 500m, memory: 1Gi }
+      requests: { cpu: 250m, memory: 512Mi }
+
+# ---------------------------------------------------------------------
+# Flink (aggregation-job, anomaly-detection-job)
+# ---------------------------------------------------------------------
+flink:
+  enabled: true
+  image:
+    repository: flink
+    tag: "1.17-scala_2.12-java11"
+  jobmanager:
+    replicaCount: 1
+    resources:
+      limits: { cpu: 2000m, memory: 4Gi }
+      requests: { cpu: 1000m, memory: 2Gi }
+    service:
+      type: ClusterIP
+      port: 8081
+  taskmanager:
+    replicaCount: 2
+    taskSlots: 4
+    resources:
+      limits: { cpu: 2000m, memory: 4Gi }
+      requests: { cpu: 1000m, memory: 2Gi }
+  jobs:
+    aggregation:
+      enabled: true
+      jarFile: "signal-aggregation-job-2.0.0.jar"
+      className: "com.signalintel.platform.aggregation.EventAggregationJob"
+      parallelism: 2
+    anomalyDetection:
+      enabled: true
+      jarFile: "signal-anomaly-detection-job-2.0.0.jar"
+      className: "com.signalintel.platform.anomaly.AnomalyDetectionJob"
+      parallelism: 2
+
+# ---------------------------------------------------------------------
+# Spark (session-analytics-job)
+# ---------------------------------------------------------------------
+spark:
+  enabled: true
+  image:
+    repository: bitnami/spark
+    tag: "3.5"
+  master:
+    replicaCount: 1
+    resources:
+      limits: { cpu: 1000m, memory: 2Gi }
+      requests: { cpu: 500m, memory: 1Gi }
+  worker:
+    replicaCount: 2
+    resources:
+      limits: { cpu: 2000m, memory: 2Gi }
+      requests: { cpu: 1000m, memory: 1Gi }
+  jobs:
+    sessionAnalytics:
+      enabled: true
+      jarFile: "signal-session-analytics-job-2.0.0.jar"
+      className: "com.signalintel.platform.sessions.SessionAnalyticsJob"
+
+# ---------------------------------------------------------------------
+# Kafka (Bitnami subchart)
+# ---------------------------------------------------------------------
+kafka:
+  enabled: true
+  replicaCount: 3
+  config:
+    autoCreateTopicsEnable: true
+    logRetentionHours: 168
+    compressionType: "snappy"
+    defaultReplicationFactor: 3
+    numPartitions: 6
+  resources:
+    limits: { cpu: 1000m, memory: 2Gi }
+    requests: { cpu: 500m, memory: 1Gi }
+  persistence:
+    enabled: true
+    size: 100Gi
+    storageClass: ""
+  metrics:
+    kafka:
+      enabled: true
+    jmx:
+      enabled: true
+
+# ---------------------------------------------------------------------
+# Redis (Bitnami subchart)
+# ---------------------------------------------------------------------
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    resources:
+      limits: { cpu: 500m, memory: 1Gi }
+      requests: { cpu: 250m, memory: 512Mi }
+    persistence:
+      enabled: true
+      size: 50Gi
+      storageClass: ""
+
+# ---------------------------------------------------------------------
+# PostgreSQL / TimescaleDB (Bitnami subchart)
+# ---------------------------------------------------------------------
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: "password"
+    username: "signalintel_admin"
+    password: "password"
+    database: "signalintel"
+  primary:
+    resources:
+      limits: { cpu: 1000m, memory: 2Gi }
+      requests: { cpu: 500m, memory: 1Gi }
+    persistence:
+      enabled: true
+      size: 200Gi
+      storageClass: ""
+
+# ---------------------------------------------------------------------
+# Monitoring
+# ---------------------------------------------------------------------
+monitoring:
+  prometheus:
+    enabled: true
+    server:
+      persistentVolume:
+        enabled: true
+        size: 50Gi
+  grafana:
+    enabled: true
+    admin:
+      user: "admin"
+      password: "admin"
+    persistence:
+      enabled: true
+      size: 10Gi
+    dashboardProviders:
+      dashboardproviders.yaml:
+        apiVersion: 1
+        providers:
+          - name: 'default'
+            orgId: 1
+            folder: ''
+            type: file
+            disableDeletion: false
+            editable: true
+            options:
+              path: /var/lib/grafana/dashboards/default
+    dashboards:
+      default:
+        kafka-overview:
+          gnetId: 721
+          revision: 1
+          datasource: Prometheus
+        flink-overview:
+          gnetId: 10369
+          revision: 1
+          datasource: Prometheus
+
+# ---------------------------------------------------------------------
+# Application config / secrets — use external secret management
+# (Vault, AWS Secrets Manager, Sealed Secrets, ...) in real production;
+# these values are for local/dev chart installs only.
+# ---------------------------------------------------------------------
+config:
+  kafka:
+    bootstrapServers: "signal-intel-platform-kafka:9092"
+  redis:
+    host: "signal-intel-platform-redis-master"
+    port: 6379
+  postgresql:
+    host: "signal-intel-platform-postgresql"
+    port: 5432
+    database: "signalintel"
+    username: "signalintel_admin"
+
+secrets:
+  postgresql:
+    password: "password"
+  apiKey:
+    value: "change-me-in-production"
+
+networkPolicy:
+  enabled: true
+  ingress:
+    enabled: true
+  egress:
+    enabled: true
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Signal Intelligence &mdash; Live Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #121821;
+    --border: #202a37;
+    --text: #e6edf3;
+    --muted: #8b98a5;
+    --accent: #4f9cff;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --crit: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 20px 28px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .status { font-size: 13px; color: var(--muted); }
+  header .status.connected { color: var(--ok); }
+  header .status.disconnected { color: var(--crit); }
+  main {
+    padding: 24px 28px;
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 20px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+  }
+  .panel h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 0 0 14px 0;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; }
+  .sev-critical { color: var(--crit); font-weight: 600; }
+  .sev-warning { color: var(--warn); font-weight: 600; }
+  .sev-info { color: var(--ok); font-weight: 600; }
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+    margin-top: 6px;
+  }
+  .kpi-card {
+    background: #0e141d;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .kpi-card .source { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+  .kpi-card .value { font-size: 20px; font-weight: 700; margin-top: 2px; }
+  .kpi-card .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  canvas { max-height: 320px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Signal Intelligence &mdash; Live Dashboard</h1>
+  <div id="status" class="status disconnected">connecting&hellip;</div>
+</header>
+
+<main>
+  <div class="panel">
+    <h2>Average metric by source (1m window)</h2>
+    <canvas id="kpiChart"></canvas>
+    <div id="kpiCards" class="kpi-grid"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Recent anomaly alerts</h2>
+    <table>
+      <thead><tr><th>Time</th><th>Source</th><th>Severity</th><th>Description</th></tr></thead>
+      <tbody id="alertsBody"></tbody>
+    </table>
+  </div>
+</main>
+
+<script src="/config.js"></script>
+<script>
+const cfg = window.SIGNAL_DASHBOARD_CONFIG || { wsUrl: "ws://localhost:8000/ws/live" };
+const statusEl = document.getElementById("status");
+const alertsBody = document.getElementById("alertsBody");
+const kpiCards = document.getElementById("kpiCards");
+
+const ctx = document.getElementById("kpiChart").getContext("2d");
+const chart = new Chart(ctx, {
+  type: "bar",
+  data: { labels: [], datasets: [{ label: "avg_metric", data: [], backgroundColor: "#4f9cff" }] },
+  options: {
+    responsive: true,
+    scales: {
+      x: { ticks: { color: "#8b98a5" }, grid: { color: "#202a37" } },
+      y: { ticks: { color: "#8b98a5" }, grid: { color: "#202a37" } },
+    },
+    plugins: { legend: { labels: { color: "#e6edf3" } } },
+  },
+});
+
+function renderKPIs(kpis) {
+  const bySource = {};
+  for (const k of kpis) {
+    if (!bySource[k.source] || k.timestamp > bySource[k.source].timestamp) {
+      bySource[k.source] = k;
+    }
+  }
+  const sources = Object.keys(bySource).sort();
+  chart.data.labels = sources;
+  chart.data.datasets[0].data = sources.map((s) => bySource[s].avg_metric || 0);
+  chart.update();
+
+  kpiCards.innerHTML = sources
+    .map((s) => {
+      const k = bySource[s];
+      return `<div class="kpi-card">
+        <div class="source">${s}</div>
+        <div class="value">${(k.avg_metric || 0).toFixed(1)}</div>
+        <div class="sub">count ${k.count || 0} &middot; err ${(100 * (k.error_rate || 0)).toFixed(1)}%</div>
+      </div>`;
+    })
+    .join("");
+}
+
+function renderAlerts(alerts) {
+  alertsBody.innerHTML = alerts
+    .map(
+      (a) => `<tr>
+        <td>${new Date(a.ts).toLocaleTimeString()}</td>
+        <td>${a.source}</td>
+        <td class="sev-${a.severity}">${a.severity}</td>
+        <td>${a.description}</td>
+      </tr>`
+    )
+    .join("");
+}
+
+function connect() {
+  const ws = new WebSocket(cfg.wsUrl);
+
+  ws.onopen = () => {
+    statusEl.textContent = "live";
+    statusEl.className = "status connected";
+  };
+
+  ws.onmessage = (evt) => {
+    const payload = JSON.parse(evt.data);
+    if (payload.type === "snapshot") {
+      renderKPIs(payload.kpis || []);
+      renderAlerts(payload.recent_alerts || []);
+    }
+  };
+
+  ws.onclose = () => {
+    statusEl.textContent = "disconnected — retrying…";
+    statusEl.className = "status disconnected";
+    setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+connect();
+</script>
+</body>
+</html>
