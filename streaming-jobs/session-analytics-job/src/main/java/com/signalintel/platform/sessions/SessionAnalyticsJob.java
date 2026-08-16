@@ -14,7 +14,7 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.util.Properties;
-import java.util.TimeoutException;
+import java.util.concurrent.TimeoutException;
 
 import static org.apache.spark.sql.functions.*;
 
