@@ -253,6 +253,21 @@ services:
       - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml
     networks: [signal-intel-network]
 
+  # Distributed tracing collector + UI. Every Python service exports spans
+  # here via OTLP/HTTP (see */tracing.py); safe to stop this container
+  # without touching anything else -- the exporters degrade to "spans
+  # created but not delivered" rather than erroring.
+  jaeger:
+    image: jaegertracing/all-in-one:1.54
+    container_name: signal-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4317:4317"    # OTLP gRPC receiver
+      - "4318:4318"    # OTLP HTTP receiver
+    networks: [signal-intel-network]
+
   # ---------------------------------------------------------------------
   # Application services
   # ---------------------------------------------------------------------
@@ -260,9 +275,15 @@ services:
     build:
       context: ../../ingestion/event-producer
     container_name: signal-event-producer
-    depends_on: [kafka]
+    depends_on: [kafka, jaeger]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      EVENTS_DLQ_TOPIC: signal.events.dlq
+      SCHEMA_VALIDATION_ENABLED: "true"
+      LOG_FORMAT: text
+      OTEL_TRACES_ENABLED: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+      OTEL_SERVICE_NAME: event-producer
     ports:
       - "8002:8002"
     command: ["python", "event_producer.py", "--bootstrap-servers", "kafka:29092", "--rate", "100", "--metrics-port", "8002"]
@@ -272,7 +293,7 @@ services:
     build:
       context: ../../services/query-api
     container_name: signal-query-api
-    depends_on: [redis, timescaledb]
+    depends_on: [redis, timescaledb, jaeger]
     environment:
       REDIS_HOST: redis
       POSTGRES_HOST: timescaledb
@@ -280,6 +301,10 @@ services:
       POSTGRES_USER: signalintel_admin
       POSTGRES_PASSWORD: password
       API_KEY_REQUIRED: "false"
+      LOG_FORMAT: text
+      OTEL_TRACES_ENABLED: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+      OTEL_SERVICE_NAME: query-api
     ports:
       - "8000:8000"
     networks: [signal-intel-network]
@@ -288,13 +313,19 @@ services:
     build:
       context: ../../services/notifier-service
     container_name: signal-notifier-service
-    depends_on: [kafka, timescaledb]
+    depends_on: [kafka, timescaledb, jaeger]
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       POSTGRES_HOST: timescaledb
       POSTGRES_DB: signalintel
       POSTGRES_USER: signalintel_admin
       POSTGRES_PASSWORD: password
+      ALERTS_DLQ_TOPIC: signal.alerts.dlq
+      SCHEMA_VALIDATION_ENABLED: "true"
+      LOG_FORMAT: text
+      OTEL_TRACES_ENABLED: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+      OTEL_SERVICE_NAME: notifier-service
     ports:
       - "8001:8001"
     networks: [signal-intel-network]

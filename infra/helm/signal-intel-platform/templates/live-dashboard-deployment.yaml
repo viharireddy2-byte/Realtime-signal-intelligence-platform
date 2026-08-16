@@ -5,16 +5,16 @@ metadata:
   name: {{ .Release.Name }}-live-dashboard
   labels:
     {{- include "signal-intel-platform.labels" . | nindent 4 }}
-    {{- include "signal-intel-platform.selectorLabels" "live-dashboard" | nindent 4 }}
+    {{- include "signal-intel-platform.selectorLabels" (dict "root" $ "component" "live-dashboard") | nindent 4 }}
 spec:
   replicas: {{ .Values.services.liveDashboard.replicaCount }}
   selector:
     matchLabels:
-      {{- include "signal-intel-platform.selectorLabels" "live-dashboard" | nindent 6 }}
+      {{- include "signal-intel-platform.selectorLabels" (dict "root" $ "component" "live-dashboard") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "signal-intel-platform.selectorLabels" "live-dashboard" | nindent 8 }}
+        {{- include "signal-intel-platform.selectorLabels" (dict "root" $ "component" "live-dashboard") | nindent 8 }}
     spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
@@ -54,5 +54,5 @@ spec:
       protocol: TCP
       name: http
   selector:
-    {{- include "signal-intel-platform.selectorLabels" "live-dashboard" | nindent 4 }}
+    {{- include "signal-intel-platform.selectorLabels" (dict "root" $ "component" "live-dashboard") | nindent 4 }}
 {{- end }}

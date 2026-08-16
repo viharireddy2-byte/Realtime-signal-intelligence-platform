@@ -22,11 +22,20 @@ app.kubernetes.io/part-of: signal-intel-platform
 {{- end }}
 
 {{/*
-Selector labels for a given component.
+Selector labels for a given component. Takes a dict: (dict "root" $ "component" "query-api").
+
+Note: this used to take the component name directly (a bare string) and
+reach for `$.Release.Name` inside the define -- but `include` executes the
+named template with the passed argument as the new root, which reassigns
+`$` to that argument for the duration of the call. So `$.Release.Name`
+was evaluating `Release.Name` against the string "query-api" and failing
+at render time (`helm template`/`helm install` would error on this template
+for every service). Passing the outer `$` through explicitly, the same way
+`signal-intel-platform.image` already does below, fixes it.
 */}}
 {{- define "signal-intel-platform.selectorLabels" -}}
-app.kubernetes.io/name: {{ . }}
-app.kubernetes.io/instance: {{ $.Release.Name }}
+app.kubernetes.io/name: {{ .component }}
+app.kubernetes.io/instance: {{ .root.Release.Name }}
 {{- end }}
 
 {{/*

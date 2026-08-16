@@ -33,6 +33,25 @@ autoscaling:
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 80
 
+# ---------------------------------------------------------------------
+# Observability: structured logging, data-contract validation, tracing.
+# Wired into every service via the shared ConfigMap (see configmap.yaml)
+# so there's one place to toggle these platform-wide.
+# ---------------------------------------------------------------------
+observability:
+  logFormat: "json"      # "text" is friendlier for `kubectl logs` by hand; "json" for a real log pipeline
+  logLevel: "INFO"
+  schemaValidationEnabled: "true"
+  tracing:
+    enabled: true
+    jaeger:
+      image:
+        repository: jaegertracing/all-in-one
+        tag: "1.54"
+      resources:
+        limits: { cpu: 500m, memory: 512Mi }
+        requests: { cpu: 100m, memory: 256Mi }
+
 nodeSelector: {}
 tolerations: []
 affinity: {}

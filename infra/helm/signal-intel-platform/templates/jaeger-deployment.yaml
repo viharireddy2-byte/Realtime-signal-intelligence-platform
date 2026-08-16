@@ -1,0 +1,58 @@
+{{- if .Values.observability.tracing.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-jaeger
+  labels:
+    {{- include "signal-intel-platform.labels" . | nindent 4 }}
+    {{- include "signal-intel-platform.selectorLabels" (dict "root" $ "component" "jaeger") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "signal-intel-platform.selectorLabels" (dict "root" $ "component" "jaeger") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "signal-intel-platform.selectorLabels" (dict "root" $ "component" "jaeger") | nindent 8 }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: jaeger
+          image: "{{ .Values.observability.tracing.jaeger.image.repository }}:{{ .Values.observability.tracing.jaeger.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: COLLECTOR_OTLP_ENABLED
+              value: "true"
+          ports:
+            - name: ui
+              containerPort: 16686
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+          resources:
+            {{- toYaml .Values.observability.tracing.jaeger.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-jaeger
+  labels:
+    {{- include "signal-intel-platform.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 16686
+      targetPort: ui
+      name: ui
+    - port: 4317
+      targetPort: otlp-grpc
+      name: otlp-grpc
+    - port: 4318
+      targetPort: otlp-http
+      name: otlp-http
+  selector:
+    {{- include "signal-intel-platform.selectorLabels" (dict "root" $ "component" "jaeger") | nindent 4 }}
+{{- end }}

@@ -14,3 +14,12 @@ data:
   POSTGRES_USER: {{ .Values.config.postgresql.username | quote }}
   EVENTS_TOPIC: "signal.events.v1"
   ALERTS_TOPIC: "signal.alerts.v1"
+  EVENTS_DLQ_TOPIC: "signal.events.dlq"
+  ALERTS_DLQ_TOPIC: "signal.alerts.dlq"
+  SCHEMA_VALIDATION_ENABLED: {{ .Values.observability.schemaValidationEnabled | quote }}
+  LOG_FORMAT: {{ .Values.observability.logFormat | quote }}
+  LOG_LEVEL: {{ .Values.observability.logLevel | quote }}
+  OTEL_TRACES_ENABLED: {{ .Values.observability.tracing.enabled | quote }}
+  {{- if .Values.observability.tracing.enabled }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://{{ .Release.Name }}-jaeger:4318/v1/traces"
+  {{- end }}

@@ -5,18 +5,18 @@ metadata:
   name: {{ .Release.Name }}-query-api
   labels:
     {{- include "signal-intel-platform.labels" . | nindent 4 }}
-    {{- include "signal-intel-platform.selectorLabels" "query-api" | nindent 4 }}
+    {{- include "signal-intel-platform.selectorLabels" (dict "root" $ "component" "query-api") | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.services.queryApi.replicaCount }}
   {{- end }}
   selector:
     matchLabels:
-      {{- include "signal-intel-platform.selectorLabels" "query-api" | nindent 6 }}
+      {{- include "signal-intel-platform.selectorLabels" (dict "root" $ "component" "query-api") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "signal-intel-platform.selectorLabels" "query-api" | nindent 8 }}
+        {{- include "signal-intel-platform.selectorLabels" (dict "root" $ "component" "query-api") | nindent 8 }}
     spec:
       {{- if .Values.global.imagePullSecrets }}
       imagePullSecrets:
@@ -48,6 +48,8 @@ spec:
                   key: API_KEY
             - name: API_KEY_REQUIRED
               value: {{ .Values.services.queryApi.env.API_KEY_REQUIRED | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: "query-api"
           livenessProbe:
             httpGet:
               path: /health
@@ -77,7 +79,7 @@ spec:
       protocol: TCP
       name: http
   selector:
-    {{- include "signal-intel-platform.selectorLabels" "query-api" | nindent 4 }}
+    {{- include "signal-intel-platform.selectorLabels" (dict "root" $ "component" "query-api") | nindent 4 }}
 {{- if and .Values.autoscaling.enabled .Values.services.queryApi.enabled }}
 ---
 apiVersion: autoscaling/v2
