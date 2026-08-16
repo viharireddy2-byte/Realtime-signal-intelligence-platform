@@ -226,6 +226,16 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
 
+    # Pushing to ghcr.io with docker/build-push-action needs packages:write
+    # on GITHUB_TOKEN. No permissions block meant the default (repo-level)
+    # token permissions applied -- read-only on this repo -- so every push
+    # 403'd. live-dashboard is the smallest image (2 deps) so its job
+    # reached the push step and failed first; the other three components
+    # were still mid-`pip install` when fail-fast cancelled them.
+    permissions:
+      contents: read
+      packages: write
+
     strategy:
       matrix:
         component:
@@ -370,7 +380,7 @@ jobs:
             ${{ runner.os }}-trivy-db-
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
