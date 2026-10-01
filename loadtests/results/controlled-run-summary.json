@@ -1,0 +1,14 @@
+{
+  "source": "Project owner supplied execution results",
+  "duration_seconds": 1800,
+  "events_processed": 12600000,
+  "average_events_per_second": 7000,
+  "flagged_event_latency_to_kafka_alert_topic_p95_ms": 450,
+  "alert_topic": "signal.alerts.v1",
+  "snappy_batch_payload_reduction_percent": 50,
+  "compression_baseline": "Same uncompressed workload",
+  "hardware": null,
+  "run_timestamp": null,
+  "run_command": null,
+  "latency_start_point": null
+}
