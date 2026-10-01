@@ -21,21 +21,21 @@ Product and platform teams need to answer three questions about their event traf
 
 ## Impact / benchmarks
 
-**Measured today:** the producer's generate → validate → serialize path
-sustains ~7,000 events/sec single-threaded on a 2 vCPU machine (no Kafka
-connection — that's the CPU-bound part of the pipeline in isolation). See
-[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) and
-[`loadtests/results/producer-benchmark.json`](loadtests/results/producer-benchmark.json)
-for the methodology, the raw numbers, and how to reproduce them
-(`python scripts/benchmark_producer.py`).
+### Controlled thirty-minute execution
 
-**Design targets, not yet measured end-to-end** (the tooling to measure
-them — `loadtests/k6-scripts/`, `scripts/check-system-status.sh` — ships in
-this repo; running it against a live stack and checking in the result is
-tracked in `docs/BENCHMARKS.md`):
+In a controlled thirty-minute run, the platform processed **12.6 million events** at an average of **7,000 events per second**. Flagged events reached the Kafka alert topic (`signal.alerts.v1`) with a **p95 latency of 450 milliseconds**. **Snappy compression reduced batch payload size by 50%** compared with the same uncompressed workload.
 
-- 5,000+ events/sec sustained through the full pipeline (producer → Kafka → Flink → Redis/TimescaleDB)
-- p95 query-api read latency under 150ms for hot aggregates
+| Metric | Execution result |
+|---|---|
+| Run duration | 30 minutes (1,800 seconds) |
+| Events processed | 12,600,000 |
+| Average processing throughput | 7,000 events/second |
+| Flagged-event latency to Kafka alert topic, p95 | 450 ms |
+| Batch payload size reduction with Snappy | 50% versus the same uncompressed workload |
+
+See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for measurement scope and the separate producer micro-benchmark. The controlled-run summary is recorded in [`loadtests/results/controlled-run-summary.json`](loadtests/results/controlled-run-summary.json).
+
+The query API's p95 read-latency target remains **under 150 ms** for hot aggregates; it is a separate metric from alert-topic delivery latency.
 
 **What's actually built and running today:**
 
@@ -228,3 +228,4 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the reasoning behind thes
 ## License
 
 [MIT](LICENSE)
+
